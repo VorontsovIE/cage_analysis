@@ -8,14 +8,13 @@ require 'cage'
 require 'identificator_mapping'
 require 'transcript_group'
 
-class GeneDataLoader
-  attr_reader :all_cages, :hgnc_to_entrezgene, :entrezgene_to_hgnc, :entrezgene_transcripts, :all_peaks, :all_transcripts, :genes, :region_length
+class GeneDataLoaderWithoutPeaks
+  attr_reader :all_cages, :hgnc_to_entrezgene, :entrezgene_to_hgnc, :entrezgene_transcripts, :all_transcripts, :genes, :region_length
   attr_reader :genes_to_process, :transcript_groups, :number_of_genes_for_a_peak
-  def initialize(cages_file, hgnc_entrezgene_mapping_file, transcript_by_entrezgene_file, peaks_for_tissue_file, transcript_infos_file, region_length)
+  def initialize(cages_file, hgnc_entrezgene_mapping_file, transcript_by_entrezgene_file, transcript_infos_file, region_length)
     @all_cages = read_cages(cages_file)
     @hgnc_to_entrezgene, @entrezgene_to_hgnc = read_hgnc_entrezgene_mappings(hgnc_entrezgene_mapping_file)
     @entrezgene_transcripts = read_entrezgene_transcript_ids(transcript_by_entrezgene_file)
-    @all_peaks = Peak.peaks_from_file(peaks_for_tissue_file, hgnc_to_entrezgene, entrezgene_to_hgnc)
     @genes = Gene.genes_from_file(hgnc_entrezgene_mapping_file)
     @all_transcripts = Transcript.transcripts_from_file(transcript_infos_file)
 
@@ -57,11 +56,17 @@ class GeneDataLoader
   def collect_peaks_and_transcripts_for_genes(group_of_genes)
     genes_to_process = {}
     group_of_genes.each do |hgnc_id, gene|
-      $logger.warn "Skip #{gene}" and next  unless gene.collect_peaks(all_peaks)
+      #$logger.warn "Skip #{gene}" and next  unless gene.collect_peaks(all_peaks)
       $logger.warn "Skip #{gene}" and next  unless gene.collect_transcripts(entrezgene_transcripts, all_transcripts)
+      peaks = []
       gene.transcripts.each do |transcript|
-        transcript.associate_peaks(gene.peaks, region_length)
+        peak_region = transcript.exons.most_upstream_region.with_upstream(region_length)
+        peak_description = "peak_by_#{gene.hgnc_id}"
+        peak = Peak.new(peak_region.annotation, peak_description, peak_description, peak_description, gene.entrezgene_id, gene.hgnc_id, 'uniprot_id', 1.0)
+        peaks << peak
+        transcript.associate_peaks([peak], region_length)
       end
+      gene.peaks = peaks
       genes_to_process[hgnc_id] = gene
     end
     genes_to_process
@@ -102,7 +107,7 @@ class GeneDataLoader
 
         # sequence and cages here are unreversed on '-'-strand. One should possibly reverse both arrays and complement sequence
         cages = utr.load_cages(all_cages)
-        sequence = utr.load_sequence('genome/hg19/')
+        sequence = utr.load_sequence('for_article/source_data/hg18/')
 
         # all transcripts in the group have the same associated peaks
         associated_peaks = transcript_group.associated_peaks
@@ -116,6 +121,8 @@ class GeneDataLoader
 
         spliced_sequence = splice_sequence(sequence, utr, exons_on_utr_plus_upstream)
         spliced_cages = utr.splice(cages, exons_on_utr_plus_upstream)
+
+        next  if spliced_cages.inject(0,&:+) == 0
 
         if block_given?
           block.call(output_stream, gene_info,transcript_group, peaks_info, summary_expression, spliced_sequence, spliced_cages)
